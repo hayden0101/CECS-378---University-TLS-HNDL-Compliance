@@ -136,11 +136,3 @@ This project aims to:
 - Evaluate exposure to retrospective decryption (HNDL)
 - Provide data-driven insights for improving TLS security
 
----
-
-## Future Improvements
-
-- Scale to 250+ university domains
-- Improve cipher suite parsing accuracy
-- Replace nmap with faster scanners (e.g., zgrab2)
-- Add lab demonstration of TLS decryption
