@@ -16,6 +16,11 @@ tls-university-study/
 ├── analysis.py
 ├── graph.py
 └── tls_graph.png       # Generated after graphing
+├   |── phase2/
+│   ├   |── server.crt
+│   ├   |── server.key
+│   ├   |── phase2_rsa.pcap
+│   └   |── phase2_ecdhe.pcap
 ```
 
 ---
@@ -126,6 +131,128 @@ This will:
 4. Run analysis.py
 5. Run graph.py
 ```
+---
+
+### Phase 2
+- Ubuntu (WSL on Windows, or native Linux)
+- OpenSSL
+- tcpdump
+- curl (Linux build)
+- Wireshark (Windows)
+
+---
+
+## Phase 2: Controlled HNDL Experiment
+
+Phase 2 is run locally in **Ubuntu (WSL)**. All commands below are run in Ubuntu unless noted.
+
+### Step 1 — Generate Certificate and Key
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt \
+  -days 365 -nodes -subj "/CN=localhost"
+```
+
+---
+
+### Step 2 — Start Server A (RSA / Non-Forward-Secret)
+
+```bash
+openssl s_server -accept 4433 \
+  -cert server.crt -key server.key \
+  -cipher "AES256-SHA" \
+  -no_tls1_3 \
+  -WWW
+```
+
+Verify cipher negotiation in a second terminal:
+
+```bash
+openssl s_client -connect 127.0.0.1:4433 | grep "Cipher is"
+```
+
+Expected output:
+```
+New, TLSv1.2, Cipher is AES256-SHA
+```
+No `ECDHE` prefix = RSA key exchange = **no forward secrecy**.
+
+---
+
+### Step 3 — Start Server B (ECDHE / Forward-Secret)
+
+```bash
+openssl s_server -accept 4434 \
+  -cert server.crt -key server.key \
+  -cipher "ECDHE-RSA-AES256-SHA" \
+  -no_tls1_3 \
+  -WWW
+```
+
+Verify cipher negotiation:
+
+```bash
+openssl s_client -connect 127.0.0.1:4434
+```
+
+Expected output:
+```
+Cipher is ECDHE-RSA-AES256-SHA
+Server Temp Key: X25519, 253 bits
+```
+
+`Server Temp Key` confirms an ephemeral key is in use = **forward secrecy active**.
+
+---
+
+### Step 4 — Capture Traffic with tcpdump
+
+> Wireshark on Windows cannot capture WSL loopback traffic directly. Use `tcpdump` inside WSL to export a `.pcap` file.
+
+**Capture Server A traffic:**
+```bash
+sudo tcpdump -i lo port 4433 -w phase2_rsa.pcap
+```
+
+**In a separate terminal, generate traffic:**
+```bash
+curl https://127.0.0.1:4433 -k -v --tls-max 1.2 --ciphers "AES256-SHA"
+```
+
+Stop tcpdump with `Ctrl+C`, then open in Wireshark:
+```bash
+explorer.exe phase2_rsa.pcap
+```
+
+Repeat for Server B:
+```bash
+sudo tcpdump -i lo port 4434 -w phase2_ecdhe.pcap
+curl https://127.0.0.1:4434 -k -v --tls-max 1.2 --ciphers "ECDHE-RSA-AES256-SHA"
+explorer.exe phase2_ecdhe.pcap
+```
+
+---
+
+### Step 5 — Attempt Decryption in Wireshark
+
+1. Go to **Edit -> Preferences -> Protocols -> TLS**
+2. Under **RSA Keys List**, click **+** and add:
+
+| Field | Value |
+|---|---|
+| IP Address | 127.0.0.1 |
+| Port | 4433 (or 4434) |
+| Protocol | http |
+| Key File | path to `server.key` |
+
+---
+
+## Results
+
+| Server | Configuration | Decryptable with Private Key? |
+|---|---|---|
+| Server A | TLS 1.2 / RSA (AES256-SHA) | Yes - GET / HTTP/1.1 visible in plaintext |
+| Server B | TLS 1.2 / ECDHE (ECDHE-RSA-AES256-SHA) | No - Encrypted Alert; session unrecoverable |
 
 ---
 
