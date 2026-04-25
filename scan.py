@@ -1,60 +1,78 @@
 import subprocess
 import json
 
-domains = []
-
-with open("universities.txt") as f:
-    domains = [d.strip() for d in f]
-
-results = []
-
-for domain in domains:
-    print(f"Scanning {domain}")
-
+def run_cmd(cmd):
     try:
-        cmd = [
-            "nmap",
-            "--script",
-            "ssl-enum-ciphers",
-            "-p",
-            "443",
-            domain
-        ]
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout + result.stderr
+    except:
+        return ""
 
-        output = subprocess.check_output(cmd).decode()
+# --- TLS VERSION CHECKS ---
 
-        # Extract cipher lines
-        lines = output.split("\n")
-        cipher_lines = [line.strip() for line in lines if "TLS_" in line]
+def check_tls13(domain):
+    output = run_cmd(f"echo | openssl s_client -connect {domain}:443 -tls1_3")
+    return "Protocol  : TLSv1.3" in output
 
-        supports_ecdhe = False
-        supports_rsa = False
+def check_tls12(domain):
+    output = run_cmd(f"echo | openssl s_client -connect {domain}:443 -tls1_2")
+    return "Protocol  : TLSv1.2" in output
 
-        for line in cipher_lines:
-            if "ECDHE" in line:
-                supports_ecdhe = True
-            if "TLS_RSA" in line:
-                supports_rsa = True
+# --- CIPHER TYPE CHECKS ---
 
-        # New classification logic
-        fully_secure = supports_ecdhe and not supports_rsa
-        vulnerable_hndl = supports_rsa
+def check_rsa_kx(domain):
+    # Force TLS 1.2 + RSA cipher
+    output = run_cmd(f"echo | openssl s_client -connect {domain}:443 -tls1_2 -cipher AES256-SHA")
+    return "Cipher    : AES256-SHA" in output or "TLS_RSA" in output
 
-        results.append({
-            "domain": domain,
-            "supports_forward_secrecy": supports_ecdhe,
-            "supports_rsa": supports_rsa,
-            "fully_secure": fully_secure,
-            "vulnerable_to_hndl": vulnerable_hndl
-        })
+def check_ecdhe(domain):
+    output = run_cmd(f"echo | openssl s_client -connect {domain}:443 -tls1_2 -cipher ECDHE")
+    return "ECDHE" in output
 
-    except Exception as e:
-        results.append({
-            "domain": domain,
-            "error": str(e)
-        })
+# --- MAIN SCAN ---
 
-with open("results.json", "w") as f:
-    json.dump(results, f, indent=4)
+def scan_domain(domain):
+    tls13 = check_tls13(domain)
+    tls12 = check_tls12(domain)
+    rsa = check_rsa_kx(domain)
+    ecdhe = check_ecdhe(domain)
 
-print("Scan complete. Results saved to results.json")
+    # Classification logic
+    vulnerable_hndl = rsa
+    fully_secure = ecdhe and not rsa
+
+    return {
+        "domain": domain,
+        "supports_tls13": tls13,
+        "supports_tls12": tls12,
+        "supports_rsa_kx": rsa,
+        "supports_ecdhe": ecdhe,
+        "vulnerable_to_hndl": vulnerable_hndl,
+        "fully_secure": fully_secure
+    }
+
+# --- DRIVER ---
+
+def main():
+    results = []
+
+    with open("universities.txt") as f:
+        domains = [line.strip() for line in f if line.strip()]
+
+    for domain in domains:
+        print(f"Scanning {domain}...")
+        results.append(scan_domain(domain))
+
+    with open("results.json", "w") as f:
+        json.dump(results, f, indent=4)
+
+    print("Scan complete. Results saved to results.json")
+
+if __name__ == "__main__":
+    main()
